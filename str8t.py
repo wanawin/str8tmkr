@@ -1,8 +1,8 @@
 # app.py
 # DC-5 Box Generator + Best Straight Picker
-# Adds ONLY:
+# Adds:
 #   - Optional "Do NOT use these digits" (excluded at generation time; leave blank for no effect)
-#   - Minimum Low/High/Even/Odd counts (each defaults to 2, adjustable 0–5)
+#   - Low/High/Even/Odd MIN & MAX (defaults: min=2, max=5). Set min=max to mimic exact counts.
 #   - Download button for final straights
 # Keeps EVERYTHING else the same, including:
 #   - Best straight only per box, but if exactly ONE position has a TWO-way tie, include BOTH straights.
@@ -33,8 +33,7 @@ def parse_mandatory_digits(s: str) -> list[int]:
     res = []
     for d in out:
         if d not in seen:
-            res.append(d)
-            seen.add(d)
+            res.append(d); seen.add(d)
     return res
 
 def parse_forbidden_digits(s: str) -> set[int]:
@@ -49,12 +48,10 @@ def parse_forbidden_digits(s: str) -> set[int]:
 def longest_consecutive_run_length(uniq_sorted: list[int]) -> int:
     if not uniq_sorted:
         return 0
-    run = 1
-    best = 1
+    run = best = 1
     for i in range(1, len(uniq_sorted)):
         if uniq_sorted[i] == uniq_sorted[i-1] + 1:
-            run += 1
-            best = max(best, run)
+            run += 1; best = max(best, run)
         else:
             run = 1
     return best
@@ -115,8 +112,7 @@ def parse_positional_stats(text: str) -> dict[int, list[float]]:
         head = head.strip().lower()
         if not (len(head) == 2 and head[0] == "p" and head[1] in "12345"):
             continue
-        pos = int(head[1])
-        row = [0.0]*10
+        pos = int(head[1]); row = [0.0]*10
         for chunk in tail.split(","):
             chunk = chunk.strip()
             if not chunk:
@@ -131,10 +127,8 @@ def parse_positional_stats(text: str) -> dict[int, list[float]]:
             if d_str.isdigit():
                 d = int(d_str)
                 if 0 <= d <= 9:
-                    try:
-                        v = float(v_str.replace("%",""))
-                    except:
-                        v = 0.0
+                    try: v = float(v_str.replace("%",""))
+                    except: v = 0.0
                     row[d] = v
         out[pos] = normalize_row(row)
     if len(out) != 5:
@@ -146,10 +140,6 @@ def straight_score(straight, pos_probs: dict[int, list[float]]) -> float:
     for i, d in enumerate(straight, start=1):
         score *= pos_probs.get(i, [0.0]*10)[d]
     return score
-
-def canonical_straight(box) -> str:
-    """Deterministic single straight from a box to avoid giant zero-score tie lists."""
-    return "".join(map(str, box))  # sorted nondecreasing (box itself)
 
 # -------------------- Sidebar: constraints --------------------
 st.sidebar.header("Constraints")
@@ -170,12 +160,22 @@ forbid_str = st.sidebar.text_input(
 )
 forbid_digits = parse_forbidden_digits(forbid_str)
 
-# Minimum counts (each defaults to 2; adjustable 0–5)
-st.sidebar.markdown("**Minimum counts (each defaults to 2)**")
-min_even = st.sidebar.number_input("Minimum Even", 0, 5, 2, 1)
-min_odd  = st.sidebar.number_input("Minimum Odd",  0, 5, 2, 1)
-min_low  = st.sidebar.number_input(f"Minimum Low (≤ {low_max})", 0, 5, 2, 1)
-min_high = st.sidebar.number_input("Minimum High (≥ low_max+1)", 0, 5, 2, 1)
+st.sidebar.markdown("**H/L/E/O minimums & maximums (defaults: min=2, max=5)**")
+c1, c2 = st.sidebar.columns(2)
+min_low  = c1.number_input(f"Min Low (≤ {low_max})", 0, 5, 2, 1)
+max_low  = c2.number_input(f"Max Low (≤ {low_max})", 0, 5, 5, 1)
+
+c3, c4 = st.sidebar.columns(2)
+min_high = c3.number_input("Min High (≥ low_max+1)", 0, 5, 2, 1)
+max_high = c4.number_input("Max High (≥ low_max+1)", 0, 5, 5, 1)
+
+c5, c6 = st.sidebar.columns(2)
+min_even = c5.number_input("Min Even", 0, 5, 2, 1)
+max_even = c6.number_input("Max Even", 0, 5, 5, 1)
+
+c7, c8 = st.sidebar.columns(2)
+min_odd  = c7.number_input("Min Odd", 0, 5, 2, 1)
+max_odd  = c8.number_input("Max Odd", 0, 5, 5, 1)
 
 st.sidebar.markdown("**Pattern allowances** (check to allow; uncheck to filter out):")
 allow_quints = st.sidebar.checkbox("Allow quints (aaaaa)", value=False)
@@ -225,18 +225,23 @@ if go:
             continue
 
         counts = Counter(comb)
+
         # Parity counts
         evens = sum(1 for d in comb if d % 2 == 0)
         odds  = 5 - evens
+
         # Low/High counts (based on low_max)
         lows  = sum(1 for d in comb if d <= low_max)
         highs = 5 - lows
 
-        # Minimum requirements
-        if evens < min_even or odds < min_odd or lows < min_low or highs < min_high:
-            continue
+        # H/L/E/O ranges
+        if not (min_low  <= lows  <= max_low):   continue
+        if not (min_high <= highs <= max_high):  continue
+        if not (min_even <= evens <= max_even):  continue
+        if not (min_odd  <= odds  <= max_odd):   continue
 
         # mandatory digits (OR)
+        mand_digits = parse_mandatory_digits(mand_str)
         if mand_digits and not any(d in counts for d in mand_digits):
             continue
 
@@ -307,10 +312,10 @@ if go:
 
         # Sort outputs by score desc, then string asc for stable display
         outputs.sort(key=lambda x: (-x[1], x[0]))
+        final_list = [s for s, _ in outputs]
 
         st.markdown("### Best Straight(s) per Box (per your tie rule)")
         st.caption("Best straight only; if exactly one position has a 2-way tie at the top, both are kept.")
-        final_list = [s for s, _ in outputs]
         st.code("\n".join(final_list))
 
         # Download button
