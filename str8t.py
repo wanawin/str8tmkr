@@ -1,14 +1,20 @@
 # app.py
 # DC-5 Box Generator + Best Straight Picker
-# Best only, but if exactly ONE position has a TWO-way tie at the top, include both straights.
+# Adds ONLY:
+#   - Optional "Do NOT use these digits" (excluded at generation time; leave blank for no effect)
+#   - Minimum Low/High/Even/Odd counts (each defaults to 2, adjustable 0–5)
+#   - Download button for final straights
+# Keeps EVERYTHING else the same, including:
+#   - Best straight only per box, but if exactly ONE position has a TWO-way tie, include BOTH straights.
 
 from __future__ import annotations
 import json
+import io
 from itertools import combinations_with_replacement, permutations
-from collections import Counter, defaultdict
+from collections import Counter
 import streamlit as st
 
-st.set_page_config(page_title="DC-5: Constrained Boxes -> Best Straights", layout="wide")
+st.set_page_config(page_title="DC-5: Constrained Boxes → Best Straight(s)", layout="wide")
 st.title("DC-5: Constrained Boxes → Best Straight(s)")
 
 # -------------------- Helpers --------------------
@@ -17,7 +23,7 @@ EPS = 1e-15          # numeric tie tolerance
 
 def parse_mandatory_digits(s: str) -> list[int]:
     out = []
-    for token in s.replace(",", " ").split():
+    for token in (s or "").replace(",", " ").split():
         if token.isdigit():
             d = int(token)
             if 0 <= d <= 9:
@@ -30,6 +36,15 @@ def parse_mandatory_digits(s: str) -> list[int]:
             res.append(d)
             seen.add(d)
     return res
+
+def parse_forbidden_digits(s: str) -> set[int]:
+    out = set()
+    for token in (s or "").replace(",", " ").split():
+        if token.isdigit():
+            d = int(token)
+            if 0 <= d <= 9:
+                out.add(d)
+    return out
 
 def longest_consecutive_run_length(uniq_sorted: list[int]) -> int:
     if not uniq_sorted:
@@ -148,13 +163,19 @@ mand_str = st.sidebar.text_input(
 )
 mand_digits = parse_mandatory_digits(mand_str)
 
-col1, col2 = st.sidebar.columns(2)
-even_exact = col1.number_input("# Even (leave -1 to ignore)", -1, 5, -1, 1)
-odd_exact  = col2.number_input("# Odd (leave -1 to ignore)",  -1, 5, -1, 1)
+# Optional forbidden digits (excluded DURING generation; leave blank for no effect)
+forbid_str = st.sidebar.text_input(
+    "Do NOT use these digits (optional)",
+    help="Comma/space-separated digits (e.g. 8, 9). Any box containing them will not be generated."
+)
+forbid_digits = parse_forbidden_digits(forbid_str)
 
-col3, col4 = st.sidebar.columns(2)
-low_exact  = col3.number_input("# Low (0..low_max) (leave -1 to ignore)", -1, 5, -1, 1)
-high_exact = col4.number_input("# High (leave -1 to ignore)", -1, 5, -1, 1)
+# Minimum counts (each defaults to 2; adjustable 0–5)
+st.sidebar.markdown("**Minimum counts (each defaults to 2)**")
+min_even = st.sidebar.number_input("Minimum Even", 0, 5, 2, 1)
+min_odd  = st.sidebar.number_input("Minimum Odd",  0, 5, 2, 1)
+min_low  = st.sidebar.number_input(f"Minimum Low (≤ {low_max})", 0, 5, 2, 1)
+min_high = st.sidebar.number_input("Minimum High (≥ low_max+1)", 0, 5, 2, 1)
 
 st.sidebar.markdown("**Pattern allowances** (check to allow; uncheck to filter out):")
 allow_quints = st.sidebar.checkbox("Allow quints (aaaaa)", value=False)
@@ -165,9 +186,11 @@ allow_runs4p = st.sidebar.checkbox("Allow runs ≥4 (e.g., 1-2-3-4)", value=Fals
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Positional stats (optional, to pick best straight)**")
-st.sidebar.caption("Paste JSON with keys p1..p5 mapping digits 0..9 to % or prob. "
-                   "Example (JSON): {\"p1\":{\"4\":28.57,\"7\":28.57,\"0\":28.57,\"2\":14.29}, ...} "
-                   "Or shorthand: p1: 4:28.57,7:28.57,0:28.57,2:14.29; p2: 9:28.57, ...")
+st.sidebar.caption(
+    "Paste JSON with keys p1..p5 mapping digits 0..9 to % or prob. "
+    'Example: {"p1":{"4":28.57,"7":28.57,"0":28.57,"2":14.29}, ...} '
+    "Or shorthand: p1: 4:28.57,7:28.57,0:28.57,2:14.29; p2: 9:28.57, ..."
+)
 pos_stats_text = st.sidebar.text_area("Positional stats", height=160, value="")
 
 go = st.sidebar.button("Generate")
@@ -188,29 +211,29 @@ if go:
 
     # Enumerate all 5-digit "boxes" (orderless multisets of digits 0..9)
     total = 0
-    kept = []
+    kept_boxes = []
 
     for comb in combinations_with_replacement(range(10), 5):
         total += 1
+
+        # Upfront forbidden digits exclusion (never generate these if provided)
+        if forbid_digits and any(d in forbid_digits for d in comb):
+            continue
+
         s = sum(comb)
         if not (sum_min <= s <= sum_max):
             continue
 
         counts = Counter(comb)
-        # even/odd
+        # Parity counts
         evens = sum(1 for d in comb if d % 2 == 0)
         odds  = 5 - evens
-        if even_exact >= 0 and evens != even_exact:
-            continue
-        if odd_exact  >= 0 and odds  != odd_exact:
-            continue
-
-        # low/high
+        # Low/High counts (based on low_max)
         lows  = sum(1 for d in comb if d <= low_max)
         highs = 5 - lows
-        if low_exact  >= 0 and lows  != low_exact:
-            continue
-        if high_exact >= 0 and highs != high_exact:
+
+        # Minimum requirements
+        if evens < min_even or odds < min_odd or lows < min_low or highs < min_high:
             continue
 
         # mandatory digits (OR)
@@ -227,16 +250,16 @@ if go:
             if longest_consecutive_run_length(uniq_sorted) >= 4:
                 continue
 
-        kept.append(comb)
+        kept_boxes.append(comb)
 
-    st.success(f"Found {len(kept)} box combos (out of {total} total).")
+    st.success(f"Found {len(kept_boxes)} box combos (out of {total} total).")
 
-    # If positional stats exist, find best straight(s) for each box — but apply your “best or 2-way single-position tie” rule
+    # If positional stats exist, find best straight(s) for each box — apply your tie rule
     if pos_probs:
         outputs = []
         notes = []
 
-        for box in kept:
+        for box in kept_boxes:
             best_score = -1.0
             best_perms = []
 
@@ -256,8 +279,7 @@ if go:
                     notes.append(f"{''.join(map(str, box))}: suppressed {len(best_perms)-1} equal 0-score ties")
                 continue
 
-            # Reduce ties: only keep both when **exactly one** position has **exactly two** digits among the best perms
-            # Build per-position value sets from the tied best perms
+            # Keep both only when exactly one position has exactly two digits among the top-tied perms
             pos_vals = [set() for _ in range(5)]
             for perm in best_perms:
                 for i, d in enumerate(perm):
@@ -265,8 +287,7 @@ if go:
 
             multi_positions = [i for i, s in enumerate(pos_vals) if len(s) > 1]
             if len(multi_positions) == 1 and len(pos_vals[multi_positions[0]]) == 2:
-                # Produce both straights differing at that one position:
-                # choose any representative from best_perms for each variant grouped by that position digit
+                # Emit both variants differing at that one position
                 idx = multi_positions[0]
                 variants = {}
                 for perm in best_perms:
@@ -275,12 +296,10 @@ if go:
                         variants[key] = perm
                     if len(variants) == 2:
                         break
-                # Emit both
                 for perm in variants.values():
                     outputs.append(("".join(map(str, perm)), best_score))
             else:
-                # Emit only one canonical best
-                # Choose lexicographically highest by score tie-break (sorted string)
+                # Emit only one canonical best (lexicographically smallest string among best perms)
                 best_one = min(("".join(map(str, p)) for p in best_perms))
                 outputs.append((best_one, best_score))
                 if len(best_perms) > 1:
@@ -290,14 +309,40 @@ if go:
         outputs.sort(key=lambda x: (-x[1], x[0]))
 
         st.markdown("### Best Straight(s) per Box (per your tie rule)")
-        st.caption("Only the best straight is shown; if exactly one position has a 2-way tie at the top, both are shown.")
-        st.code("\n".join(s for s, _ in outputs))
+        st.caption("Best straight only; if exactly one position has a 2-way tie at the top, both are kept.")
+        final_list = [s for s, _ in outputs]
+        st.code("\n".join(final_list))
+
+        # Download button
+        if final_list:
+            buf = io.StringIO()
+            buf.write("\n".join(final_list))
+            st.download_button(
+                "Download final straights (.txt)",
+                data=buf.getvalue(),
+                file_name="final_straights.txt",
+                mime="text/plain"
+            )
 
         if notes:
             st.info("Tie reductions:\n" + "\n".join(notes))
+
     else:
         st.markdown("### Boxes (no positional stats provided)")
         st.caption("Paste positional stats in the sidebar to score and order straights.")
-        st.code("\n".join("".join(map(str, b)) for b in kept))
+        box_list = ["".join(map(str, b)) for b in kept_boxes]
+        st.code("\n".join(box_list))
+
+        # Download button for boxes
+        if box_list:
+            buf = io.StringIO()
+            buf.write("\n".join(box_list))
+            st.download_button(
+                "Download boxes (.txt)",
+                data=buf.getvalue(),
+                file_name="boxes.txt",
+                mime="text/plain"
+            )
+
 else:
     st.info("Set your constraints and click **Generate**.")
