@@ -285,11 +285,6 @@ if go:
     # Enumerate all 5-digit "boxes" (orderless multisets of digits 0..9)
     total = 0
     kept_boxes = []
-def box_key(s): return tuple(sorted(map(int, s)))
-target_box = (2,3,5,7,9)
-if target_box not in generated_boxes:  # set of box_key for all enumerated combos
-    st.error("BOX {2,3,5,7,9} was NEVER GENERATED. Enable Singles (abcde) and re-run.")
-
     for comb in combinations_with_replacement(range(10), 5):
         total += 1
 
