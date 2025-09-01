@@ -194,6 +194,79 @@ st.sidebar.caption(
 pos_stats_text = st.sidebar.text_area("Positional stats", height=160, value="")
 
 go = st.sidebar.button("Generate")
+# ------------- Debug: Why a specific combo is excluded? -------------
+with st.expander("🔍 Debug a specific combo (why excluded?)"):
+    test_combo_str = st.text_input("Enter a 5-digit combo to test (e.g., 23579)")
+    if st.button("Test this combo"):
+        msg = []
+        ok = True
+        if not (test_combo_str.isdigit() and len(test_combo_str) == 5):
+            st.error("Please enter exactly 5 digits.")
+        else:
+            # turn into a sorted 'box' like the generator uses
+            comb = tuple(sorted(int(c) for c in test_combo_str))
+            s = sum(comb)
+            from collections import Counter
+            counts = Counter(comb)
+
+            # forbidden
+            if forbid_digits and any(d in forbid_digits for d in comb):
+                ok = False; msg.append("❌ Forbidden digits present.")
+
+            # sum
+            if not (sum_min <= s <= sum_max):
+                ok = False; msg.append(f"❌ Sum {s} outside [{sum_min}, {sum_max}].")
+
+            # parity
+            evens = sum(1 for d in comb if d % 2 == 0)
+            odds  = 5 - evens
+            # low/high
+            lows  = sum(1 for d in comb if d <= low_max)
+            highs = 5 - lows
+
+            if not (min_low  <= lows  <= max_low):   ok = False; msg.append(f"❌ Lows={lows} not in [{min_low},{max_low}] (low≤{low_max}).")
+            if not (min_high <= highs <= max_high):  ok = False; msg.append(f"❌ Highs={highs} not in [{min_high},{max_high}].")
+            if not (min_even <= evens <= max_even):  ok = False; msg.append(f"❌ Evens={evens} not in [{min_even},{max_even}].")
+            if not (min_odd  <= odds  <= max_odd):   ok = False; msg.append(f"❌ Odds={odds} not in [{min_odd},{max_odd}].")
+
+            # mandatory (OR)
+            if mand_digits and not any(d in counts for d in mand_digits):
+                ok = False; msg.append(f"❌ Mandatory digits {mand_digits} not present (OR logic).")
+
+            # patterns
+            from collections import Counter
+            def violates_patterns_dbg(counts, allow_quints, allow_quads, allow_triples, allow_double_doubles):
+                vals = list(counts.values())
+                if not allow_quints and any(v == 5 for v in vals): return "quints"
+                if not allow_quads  and any(v == 4 for v in vals): return "quads"
+                if not allow_triples and any(v == 3 for v in vals): return "triples"
+                pairs = sum(1 for v in vals if v == 2)
+                if not allow_double_doubles and pairs >= 2: return "double-doubles"
+                return None
+            v = violates_patterns_dbg(counts, allow_quints, allow_quads, allow_triples, allow_dd)
+            if v:
+                ok = False; msg.append(f"❌ Pattern filtered: {v}")
+
+            # runs
+            def longest_consecutive_run_length(uniq_sorted):
+                if not uniq_sorted: return 0
+                run = best = 1
+                for i in range(1, len(uniq_sorted)):
+                    if uniq_sorted[i] == uniq_sorted[i-1] + 1:
+                        run += 1; best = max(best, run)
+                    else:
+                        run = 1
+                return best
+            if not allow_runs4p:
+                uniq_sorted = sorted(set(comb))
+                if longest_consecutive_run_length(uniq_sorted) >= 4:
+                    ok = False; msg.append("❌ Run ≥ 4 not allowed.")
+
+            if ok:
+                st.success(f"✅ {test_combo_str} passes all filters.")
+            else:
+                st.error(f"{test_combo_str} was excluded for:")
+                st.write("\n".join(msg))
 
 # -------------------- Core generation --------------------
 if go:
